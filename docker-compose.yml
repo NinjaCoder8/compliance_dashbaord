@@ -1,0 +1,7 @@
+services:
+  frontend:
+    build: .
+    container_name: compliance-dashboard
+    ports:
+      - "8080:8501"
+    restart: unless-stopped 
