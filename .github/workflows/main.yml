@@ -1,0 +1,55 @@
+name: Run CI/CD on Main Branch
+
+on: 
+  push:
+    branches: [main]
+
+jobs:
+  cd: 
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout (Copying) Repository
+        uses: actions/checkout@v4 
+
+      - name: Upload Files to EC2
+        uses: appleboy/scp-action@v1
+        with:
+          host: ${{ secrets.EC2_HOST }}
+          username: ${{ secrets.EC2_USER }}
+          key: ${{ secrets.EC2_SSH_KEY }}
+          port: ${{ secrets.EC2_PORT }}
+          protocol: tcp4
+          timeout: 60s
+          command_timeout: 30m
+          source: "."
+          target: "~/app"
+
+      - name: Install Docker 
+        uses: appleboy/ssh-action@v1.0.1
+        with:
+          host: ${{ secrets.EC2_HOST }}
+          username: ${{ secrets.EC2_USER }}
+          key: ${{ secrets.EC2_SSH_KEY }}
+          port: ${{ secrets.EC2_PORT }}
+          script: | 
+            if ! command -v docker >/dev/null 2>&1; then 
+              curl -fsSl https://get.docker.com | sudo sh 
+              sudo apt-get install -y docker-compose-plugin 
+              sudo usermod -aG docker $USER
+            else
+              echo "Docker is already installed"
+            fi
+            
+      - name: Run Containers on EC2
+        uses: appleboy/ssh-action@v1.0.1
+        with:
+          host: ${{ secrets.EC2_HOST }}
+          username: ${{ secrets.EC2_USER }}
+          key: ${{ secrets.EC2_SSH_KEY }}
+          port: ${{ secrets.EC2_PORT }}
+          command_timeout: 30m
+          script: | 
+            cd ~/app 
+            docker compose down -v || true 
+            docker compose up -d --build
