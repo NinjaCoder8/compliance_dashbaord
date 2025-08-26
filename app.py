@@ -676,6 +676,76 @@ else:
         st.info("Upload your complaints file to compute ratios.")
 
 # -------------------------
+# 30-Day Complaint Rate (by Enrollment Month)
+# -------------------------
+st.subheader("30-Day Complaint Rate (Enrollment Month)")
+
+if has_complaints_data and not enrollments_monthly.empty and "Enrollment Date" in f.columns and "Date of Occurence" in f.columns:
+    c = f.dropna(subset=["Enrollment Date", "Date of Occurence"]).copy()
+    if not c.empty:
+        c["days_from_enroll"] = (c["Date of Occurence"] - c["Enrollment Date"]).dt.days
+        c = c[(c["days_from_enroll"] >= 0) & (c["days_from_enroll"] <= 30)]
+
+        if not c.empty:
+            c["month"] = c["Enrollment Date"].dt.to_period("M").dt.to_timestamp()
+            m = c.groupby("month").size().reset_index(name="complaints_30d")
+            rate_df2 = enrollments_monthly.merge(m, on="month", how="left")
+            rate_df2["complaints_30d"] = rate_df2["complaints_30d"].fillna(0)
+
+            if start is not None and end is not None:
+                start_ts = pd.to_datetime(start).to_period("M").to_timestamp()
+                end_ts = pd.to_datetime(end).to_period("M").to_timestamp()
+                rate_df2 = rate_df2[(rate_df2["month"] >= start_ts) & (rate_df2["month"] <= end_ts)]
+
+            # Rate as fraction for proper % axis formatting
+            rate_df2["rate"] = rate_df2["complaints_30d"] / rate_df2["enrollments"]
+            rate_df2["rate"] = rate_df2["rate"].replace([np.inf, -np.inf], np.nan)
+
+            if not rate_df2.empty:
+                rate_fig = px.line(
+                    rate_df2,
+                    x="month",
+                    y="rate",
+                    markers=True,
+                    title="30-Day Complaint Rate by Enrollment Cohort = complaints≤30d / enrollments",
+                    labels={"month": "Enrollment Month", "rate": "Rate"},
+                    custom_data=["complaints_30d", "enrollments"],
+                )
+                rate_fig.update_yaxes(tickformat=",.0%", autorange=True)
+                rate_fig.update_traces(
+                    mode="lines+markers+text",
+                    text=(rate_df2["rate"] * 100).round(1).astype(str) + "%",
+                    textposition="top center",
+                    hovertemplate="%{x|%b %Y}<br>%{customdata[0]:,.0f} / %{customdata[1]:,.0f} = %{y:.1%}<extra></extra>",
+                )
+                st.plotly_chart(rate_fig, use_container_width=True)
+
+                # Companion counts bar chart (enrollments & 30d complaints)
+                counts_df = rate_df2[["month", "enrollments", "complaints_30d"]].copy()
+                counts_long = counts_df.melt(id_vars="month", var_name="metric", value_name="count")
+                label_map = {"enrollments": "Enrollments", "complaints_30d": "Complaints ≤30d"}
+                counts_long["metric"] = counts_long["metric"].map(label_map)
+                counts_fig = px.bar(
+                    counts_long,
+                    x="month",
+                    y="count",
+                    color="metric",
+                    barmode="group",
+                    title="Monthly Counts: Enrollments vs Complaints ≤30d",
+                    labels={"month": "Month", "count": "Count", "metric": "Series"},
+                    text_auto=True,
+                )
+                st.plotly_chart(counts_fig, use_container_width=True)
+            else:
+                st.info("No months available after applying the date range.")
+        else:
+            st.info("No complaints with occurrence within 30 days of enrollment in current selection.")
+    else:
+        st.info("No complaints rows with both 'Enrollment Date' and 'Date of Occurence'.")
+else:
+    st.info("Need complaints with 'Enrollment Date' and 'Date of Occurence', and enrollments data to compute 30-day rate.")
+
+# -------------------------
 # Carrier Comparison — % of Carrier-Derived, SLAs, and Trends
 # -------------------------
 st.subheader("Carrier Comparison")
