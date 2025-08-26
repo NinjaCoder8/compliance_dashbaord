@@ -739,7 +739,7 @@ if has_complaints_data and not enrollments_monthly.empty and "Enrollment Date" i
                     y="count",
                     color="metric",
                     barmode="group",
-                    title="Monthly Counts: Enrollments vs Complaints ≤30d",
+                    title="Monthly Counts: Enrollments vs Complaints < 30d",
                     labels={"month": "Month", "count": "Count", "metric": "Series"},
                     text_auto=True,
                 )
