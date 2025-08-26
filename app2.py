@@ -539,6 +539,7 @@ if has_complaints_data:
             vol, x="month", y="count", color="Complaint Source",
             title="Complaints by Month (Stacked by Source)",
             labels={"month": "Month", "count": "Complaints"},
+            text_auto=True,
         )
         vol_fig.update_layout(barmode="stack", legend_title_text="Source", xaxis_title=None)
         st.plotly_chart(vol_fig, use_container_width=True)
@@ -558,22 +559,77 @@ if has_complaints_data:
         c1, c2 = st.columns(2)
         with c1:
             if not weekly.empty:
-                w_fig = px.line(weekly, x="_week", y="count", markers=True,
-                                 title="Complaints by Week (Date of Occurence)")
-                w_fig.update_layout(xaxis_title="Week", yaxis_title="Complaints")
+                w_fig = px.line(
+                    weekly,
+                    x="_week",
+                    y="count",
+                    markers=True,
+                    title="Complaints by Week (Date of Occurence)",
+                    labels={"_week": "Week", "count": "Complaints"},
+                )
+                w_fig.update_layout(xaxis_title="Week", yaxis_title="Complaints", showlegend=False)
+                w_fig.update_traces(mode="lines+markers+text", text=weekly["count"], textposition="top center")
                 st.plotly_chart(w_fig, use_container_width=True)
             else:
                 st.info("No Date of Occurence values in range to plot weekly.")
         with c2:
             if not monthly_occ.empty:
-                m_fig = px.bar(monthly_occ, x="_month_occ", y="count",
-                               title="Complaints by Month (Date of Occurence)")
-                m_fig.update_layout(xaxis_title="Month", yaxis_title="Complaints")
+                m_fig = px.bar(
+                    monthly_occ,
+                    x="_month_occ",
+                    y="count",
+                    title="Complaints by Month (Date of Occurence)",
+                    text_auto=True,
+                    labels={"_month_occ": "Month", "count": "Complaints"},
+                )
+                m_fig.update_layout(xaxis_title="Month", yaxis_title="Complaints", showlegend=False)
                 st.plotly_chart(m_fig, use_container_width=True)
             else:
                 st.info("No Date of Occurence values in range to plot monthly.")
     else:
         st.info("No 'Date of Occurence' column found to compute weekly/monthly trends.")
+
+    # 2b) Enrollment Date duplicate trends: weekly and monthly
+    if "Enrollment Date" in f.columns and f["Enrollment Date"].notna().any():
+        enr = f.dropna(subset=["Enrollment Date"]).copy()
+        enr["_week_enr"] = enr["Enrollment Date"].dt.to_period("W").dt.start_time
+        enr["_month_enr"] = enr["Enrollment Date"].dt.to_period("M").dt.to_timestamp()
+
+        weekly_enr = enr.groupby("_week_enr").size().reset_index(name="count")
+        monthly_enr = enr.groupby("_month_enr").size().reset_index(name="count")
+
+        e1, e2 = st.columns(2)
+        with e1:
+            if not weekly_enr.empty:
+                we_fig = px.line(
+                    weekly_enr,
+                    x="_week_enr",
+                    y="count",
+                    markers=True,
+                    title="Complaints by Week (Enrollment Date)",
+                    labels={"_week_enr": "Week", "count": "Complaints"},
+                )
+                we_fig.update_layout(xaxis_title="Week", yaxis_title="Complaints", showlegend=False)
+                we_fig.update_traces(mode="lines+markers+text", text=weekly_enr["count"], textposition="top center")
+                st.plotly_chart(we_fig, use_container_width=True)
+            else:
+                st.info("No Enrollment Date values in range to plot weekly.")
+        with e2:
+            if not monthly_enr.empty:
+                me_fig = px.bar(
+                    monthly_enr,
+                    x="_month_enr",
+                    y="count",
+                    title="Complaints by Month (Enrollment Date)",
+                    text_auto=True,
+                    labels={"_month_enr": "Month", "count": "Complaints"},
+                )
+                me_fig.update_layout(xaxis_title="Month", yaxis_title="Complaints", showlegend=False)
+                st.plotly_chart(me_fig, use_container_width=True)
+            else:
+                st.info("No Enrollment Date values in range to plot monthly.")
+    else:
+        st.info("No 'Enrollment Date' column found to compute weekly/monthly trends.")
 
     
 
@@ -595,10 +651,10 @@ if has_complaints_data:
         ratio_df["complaints_per_1000_enrollments"] = (ratio_df["complaints"] / ratio_df["enrollments"]) * 1000
 
         r_fig = go.Figure()
-        r_fig.add_bar(x=ratio_df["month"], y=ratio_df["complaints"], name="Complaints")
-        r_fig.add_scatter(x=ratio_df["month"], y=ratio_df["enrollments"], name="Enrollments", mode="lines+markers", yaxis="y2")
+        r_fig.add_bar(x=ratio_df["month"], y=ratio_df["complaints"], name="Complaints", text=ratio_df["complaints"], textposition="outside")
+        r_fig.add_scatter(x=ratio_df["month"], y=ratio_df["enrollments"], name="Enrollments", mode="lines+markers+text", text=ratio_df["enrollments"], textposition="top center", yaxis="y2")
         r_fig.update_layout(
-            title="Complaints vs Enrollments (Dual Axis)",
+            title="Complaints vs Enrollments",
             yaxis=dict(title="Complaints"),
             yaxis2=dict(title="Enrollments", overlaying="y", side="right"),
             xaxis_title=None,
@@ -606,8 +662,16 @@ if has_complaints_data:
         )
         st.plotly_chart(r_fig, use_container_width=True)
 
-        rr_fig = px.line(ratio_df, x="month", y="complaints_per_1000_enrollments", markers=True,
-                         title="Complaints per 1,000 Enrollments")
+        rr_fig = px.line(
+            ratio_df,
+            x="month",
+            y="complaints_per_1000_enrollments",
+            markers=True,
+            title="Complaints per 1,000 Enrollments",
+            labels={"month": "Month", "complaints_per_1000_enrollments": "Complaints per 1,000 Enrollments"},
+        )
+        rr_fig.update_layout(showlegend=False)
+        rr_fig.update_traces(mode="lines+markers+text", text=ratio_df["complaints_per_1000_enrollments"].round(1), textposition="top center")
         st.plotly_chart(rr_fig, use_container_width=True)
     else:
         if enrollments_monthly.empty:
@@ -619,6 +683,95 @@ else:
         st.info("Could not load complaints from compliance.csv. Place it in the app directory to compute ratios.")
 
  
+
+# -------------------------
+# Carrier Comparison — % of Carrier-Derived, SLAs, and Trends
+# -------------------------
+st.subheader("Carrier Comparison")
+if has_complaints_data and not f.empty and safe_col(f, "Carrier Name"):
+    by_car = f.groupby("Carrier Name", dropna=False)
+    metrics_df = pd.DataFrame({
+        "complaints": by_car.size(),
+        "carrier_derived_share": by_car["Complaint Source"].apply(lambda s: (s == "Carrier-Derived").mean() if len(s) else np.nan),
+        "ctm_share": by_car["Complaint Source"].apply(lambda s: (s == "CMS (CTM)").mean() if len(s) else np.nan),
+        "on_time_rate": by_car["On Time (<= Deadline)"].mean(),
+        "median_days_submit": by_car["Days to Submit"].median(),
+        "avg_days_late": by_car["Days Late"].mean(),
+    }).reset_index().rename(columns={"Carrier Name": "carrier"})
+
+    # Exclude unknown carriers from visualizations
+    metrics_df = metrics_df[metrics_df["carrier"] != "(Unknown)"]
+    metrics_df = metrics_df.sort_values("complaints", ascending=False)
+    selection = metrics_df.copy()
+    selected_carriers = selection["carrier"].tolist()
+
+    # 1) Composition: 100% stacked (Carrier-Derived vs CTM)
+    comp = (
+        f[f["Carrier Name"].isin(selected_carriers)]
+          .groupby(["Carrier Name", "Complaint Source"], dropna=False)
+          .size().reset_index(name="count")
+    )
+    if not comp.empty:
+        comp_fig = px.bar(
+            comp, x="Carrier Name", y="count", color="Complaint Source",
+            title="Complaint Source Mix by Carrier",
+            labels={"Carrier Name": "Carrier", "count": "Share"},
+            text_auto=True,
+        )
+        comp_fig.update_layout(barmode="stack", barnorm="percent", xaxis_title=None, legend_title_text="Source")
+        st.plotly_chart(comp_fig, use_container_width=True)
+
+    # 2) Bubble: On-Time vs % Carrier-Derived, bubble size = volume, color = Avg Days Late
+    if not selection.empty:
+        bub_fig = px.scatter(
+            selection,
+            x="on_time_rate",
+            y="carrier_derived_share",
+            size="complaints",
+            color="avg_days_late",
+            color_continuous_scale="RdYlGn_r",
+            hover_name="carrier",
+            size_max=40,
+            labels={
+                "on_time_rate": "On-Time Rate",
+                "carrier_derived_share": "% Carrier-Derived",
+                "avg_days_late": "Avg Days Late",
+                "complaints": "Complaints",
+            },
+            title="Carrier Performance Bubble: On-Time vs % Carrier-Derived",
+        )
+        bub_fig.update_xaxes(tickformat=",.0%", autorange=True)
+        bub_fig.update_yaxes(tickformat=",.0%", autorange=True)
+        bub_fig.update_layout(xaxis_autorange=True, yaxis_autorange=True)
+        st.plotly_chart(bub_fig, use_container_width=True)
+
+    
+
+    # 4) Heatmap: Monthly complaint volume (limited to selected carriers)
+    if "_trend_month" in f.columns and not f.empty and selected_carriers:
+        month_counts = (
+            f[f["Carrier Name"].isin(selected_carriers)]
+             .assign(month=f["_trend_month"]) 
+             .groupby(["Carrier Name", "month"], dropna=False).size().reset_index(name="count")
+        )
+        if not month_counts.empty:
+            pivot = month_counts.pivot(index="Carrier Name", columns="month", values="count").fillna(0)
+            # Order carriers by total volume, after excluding unknowns above
+            pivot = pivot.loc[selection.set_index("carrier").index.intersection(pivot.index)]
+            if not pivot.empty:
+                hm_fig = px.imshow(
+                    pivot,
+                    aspect="auto",
+                    color_continuous_scale="Blues",
+                    text_auto=".0f",
+                    labels=dict(x="Month", y="Carrier", color="Complaints"),
+                    title="Monthly Complaint Volume by Carrier",
+                )
+                st.plotly_chart(hm_fig, use_container_width=True)
+            else:
+                st.info("No carriers available after excluding unknown.")
+else:
+    st.info("No carrier data available in the current selection.")
 
 # -------------------------
 # Raw/Filtered Data + Export

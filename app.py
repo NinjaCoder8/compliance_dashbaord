@@ -552,9 +552,13 @@ if has_complaints_data:
     )
     if not vol.empty:
         vol_fig = px.bar(
-            vol, x="month", y="count", color="Complaint Source",
+            vol,
+            x="month",
+            y="count",
+            color="Complaint Source",
             title="Complaints by Month (Stacked by Source)",
-            labels={"month": "Month", "count": "Complaints"},
+            labels={"month": "Month", "count": "Complaints", "Complaint Source": "Complaint Source"},
+            text_auto=True,
         )
         vol_fig.update_layout(barmode="stack", legend_title_text="Source", xaxis_title=None)
         st.plotly_chart(vol_fig, use_container_width=True)
@@ -567,10 +571,16 @@ if has_complaints_data:
          .groupby("month", dropna=False)["On Time (<= Deadline)"].mean().reset_index(name="on_time_rate")
     )
     if not sla.empty:
-        sla_fig = px.line(sla, x="month", y="on_time_rate", markers=True,
-                          title="On-Time Rate by Month",
-                          labels={"on_time_rate": "On-Time Rate"})
-        sla_fig.update_yaxes(tickformat=",.0%", range=[0,1])
+        sla_fig = px.line(
+            sla,
+            x="month",
+            y="on_time_rate",
+            markers=True,
+            title="On-Time Rate by Month",
+            labels={"month": "Month", "on_time_rate": "On-Time Rate"},
+        )
+        sla_fig.update_yaxes(tickformat=",.0%", autorange=True)
+        sla_fig.update_traces(mode="lines+markers+text", text=(sla["on_time_rate"]*100).round(0).astype(int).astype(str)+"%", textposition="top center")
         st.plotly_chart(sla_fig, use_container_width=True)
 
     # 3) Avg days to submit by month
@@ -579,22 +589,41 @@ if has_complaints_data:
          .groupby("month", dropna=False)["Days to Submit"].mean().reset_index(name="avg_days_to_submit")
     )
     if not speed.empty and speed["avg_days_to_submit"].notna().any():
-        sp_fig = px.line(speed, x="month", y="avg_days_to_submit", markers=True,
-                         title="Average Days to Submit by Month",
-                         labels={"avg_days_to_submit": "Days"})
+        sp_fig = px.line(
+            speed,
+            x="month",
+            y="avg_days_to_submit",
+            markers=True,
+            title="Average Days to Submit by Month",
+            labels={"month": "Month", "avg_days_to_submit": "Days"},
+        )
+        sp_fig.update_traces(mode="lines+markers+text", text=speed["avg_days_to_submit"].round(1), textposition="top center")
         st.plotly_chart(sp_fig, use_container_width=True)
 
     # 4) Status breakdown by team
     if "Team Name" in f.columns and "Case Status" in f.columns and not f.empty:
         by_team = f.groupby(["Team Name", "Case Status"], dropna=False).size().reset_index(name="count")
-        team_fig = px.bar(by_team, x="Team Name", y="count", color="Case Status",
-                          title="Case Status by Team", barmode="stack")
+        team_fig = px.bar(
+            by_team,
+            x="Team Name",
+            y="count",
+            color="Case Status",
+            title="Case Status by Team",
+            barmode="stack",
+            labels={"Team Name": "Team", "count": "Cases", "Case Status": "Case Status"},
+        )
         team_fig.update_layout(xaxis_title="Team", yaxis_title="Cases")
         st.plotly_chart(team_fig, use_container_width=True)
 
     # 5) Recording quality distribution
     if "Recording Score" in f.columns and f["Recording Score"].notna().any():
-        rec_fig = px.histogram(f, x="Recording Score", nbins=20, title="Recording Score Distribution")
+        rec_fig = px.histogram(
+            f,
+            x="Recording Score",
+            nbins=20,
+            title="Recording Score Distribution",
+            labels={"Recording Score": "Recording Score"},
+        )
         st.plotly_chart(rec_fig, use_container_width=True)
 
 # -------------------------
@@ -615,8 +644,8 @@ if has_complaints_data:
         ratio_df["complaints_per_1000_enrollments"] = (ratio_df["complaints"] / ratio_df["enrollments"]) * 1000
 
         r_fig = go.Figure()
-        r_fig.add_bar(x=ratio_df["month"], y=ratio_df["complaints"], name="Complaints")
-        r_fig.add_scatter(x=ratio_df["month"], y=ratio_df["enrollments"], name="Enrollments", mode="lines+markers", yaxis="y2")
+        r_fig.add_bar(x=ratio_df["month"], y=ratio_df["complaints"], name="Complaints", text=ratio_df["complaints"], textposition="outside")
+        r_fig.add_scatter(x=ratio_df["month"], y=ratio_df["enrollments"], name="Enrollments", mode="lines+markers+text", text=ratio_df["enrollments"], textposition="top center", yaxis="y2")
         r_fig.update_layout(
             title="Complaints vs Enrollments (Dual Axis)",
             yaxis=dict(title="Complaints"),
@@ -626,8 +655,16 @@ if has_complaints_data:
         )
         st.plotly_chart(r_fig, use_container_width=True)
 
-        rr_fig = px.line(ratio_df, x="month", y="complaints_per_1000_enrollments", markers=True,
-                         title="Complaints per 1,000 Enrollments")
+        rr_fig = px.line(
+            ratio_df,
+            x="month",
+            y="complaints_per_1000_enrollments",
+            markers=True,
+            title="Complaints per 1,000 Enrollments",
+            labels={"month": "Month", "complaints_per_1000_enrollments": "Complaints per 1,000 Enrollments"},
+        )
+        rr_fig.update_layout(showlegend=False)
+        rr_fig.update_traces(mode="lines+markers+text", text=ratio_df["complaints_per_1000_enrollments"].round(1), textposition="top center")
         st.plotly_chart(rr_fig, use_container_width=True)
     else:
         if enrollments_monthly.empty:
@@ -637,6 +674,88 @@ if has_complaints_data:
 else:
     if not enrollments_monthly.empty:
         st.info("Upload your complaints file to compute ratios.")
+
+# -------------------------
+# Carrier Comparison — % of Carrier-Derived, SLAs, and Trends
+# -------------------------
+st.subheader("Carrier Comparison")
+if has_complaints_data and not f.empty and "Carrier Name" in f.columns:
+    by_car = f.groupby("Carrier Name", dropna=False)
+    metrics_df = pd.DataFrame({
+        "complaints": by_car.size(),
+        "carrier_derived_share": by_car["Complaint Source"].apply(lambda s: (s == "Carrier-Derived").mean() if len(s) else np.nan),
+        "ctm_share": by_car["Complaint Source"].apply(lambda s: (s == "CMS (CTM)").mean() if len(s) else np.nan),
+        "on_time_rate": by_car["On Time (<= Deadline)"].mean(),
+        "median_days_submit": by_car["Days to Submit"].median(),
+        "avg_days_late": by_car["Days Late"].mean(),
+    }).reset_index().rename(columns={"Carrier Name": "carrier"})
+
+    # Exclude unknown carriers from visualizations
+    metrics_df = metrics_df[metrics_df["carrier"] != "(Unknown)"]
+    metrics_df = metrics_df.sort_values("complaints", ascending=False)
+    selection = metrics_df.copy()
+    selected_carriers = selection["carrier"].tolist()
+
+    comp = (
+        f[f["Carrier Name"].isin(selected_carriers)]
+          .groupby(["Carrier Name", "Complaint Source"], dropna=False)
+          .size().reset_index(name="count")
+    )
+    if not comp.empty:
+        comp_fig = px.bar(
+            comp,
+            x="Carrier Name",
+            y="count",
+            color="Complaint Source",
+            title="Complaint Source Mix by Carrier (100%)",
+            labels={"Carrier Name": "Carrier", "count": "Share", "Complaint Source": "Complaint Source"},
+            text_auto=True,
+        )
+        comp_fig.update_layout(barmode="stack", barnorm="percent", xaxis_title=None, legend_title_text="Source")
+        st.plotly_chart(comp_fig, use_container_width=True)
+
+    if not selection.empty:
+        bub_fig = px.scatter(
+            selection,
+            x="on_time_rate",
+            y="carrier_derived_share",
+            size="complaints",
+            color="avg_days_late",
+            color_continuous_scale="RdYlGn_r",
+            hover_name="carrier",
+            size_max=40,
+            labels={"on_time_rate": "On-Time Rate", "carrier_derived_share": "% Carrier-Derived", "avg_days_late": "Avg Days Late", "complaints": "Complaints"},
+            title="Carrier Performance Bubble: On-Time vs % Carrier-Derived",
+        )
+        bub_fig.update_xaxes(tickformat=",.0%", autorange=True)
+        bub_fig.update_yaxes(tickformat=",.0%", autorange=True)
+        st.plotly_chart(bub_fig, use_container_width=True)
+
+    
+
+    if "_trend_month" in f.columns and not f.empty and selected_carriers:
+        month_counts = (
+            f[f["Carrier Name"].isin(selected_carriers)]
+             .assign(month=f["_trend_month"]) 
+             .groupby(["Carrier Name", "month"], dropna=False).size().reset_index(name="count")
+        )
+        if not month_counts.empty:
+            pivot = month_counts.pivot(index="Carrier Name", columns="month", values="count").fillna(0)
+            pivot = pivot.loc[selection.set_index("carrier").index.intersection(pivot.index)]
+            if not pivot.empty:
+                hm_fig = px.imshow(
+                    pivot,
+                    aspect="auto",
+                    color_continuous_scale="Blues",
+                    text_auto=".0f",
+                    labels=dict(x="Month", y="Carrier", color="Complaints"),
+                    title="Monthly Complaint Volume by Carrier",
+                )
+                st.plotly_chart(hm_fig, use_container_width=True)
+            else:
+                st.info("No carriers available after excluding unknown.")
+else:
+    st.info("No carrier data available in the current selection.")
 
 # -------------------------
 # Agent Leaderboard
