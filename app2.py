@@ -408,7 +408,7 @@ if has_complaints_data:
 
     f = _df.loc[mask].copy()
 
-    st.caption(f"Filtered complaint rows: **{len(f):,}** of **{len(_df):,}** total.")
+    #st.caption(f"Filtered complaint rows: **{len(f):,}** of **{len(_df):,}** total.")
 else:
     # Define placeholders so later sections can safely check
     f = pd.DataFrame()
@@ -486,7 +486,7 @@ if not enr_raw.empty:
 # KPIs (complaints-focused)
 # -------------------------
 if has_complaints_data:
-    left, mid, right, enr_col = st.columns([1,1,1,1])
+    left, mid, enr_col = st.columns([1,1,1])
 
     with left:
         total_cases = len(f)
@@ -497,10 +497,6 @@ if has_complaints_data:
         median_days_submit = (f["Days to Submit"].median() if f["Days to Submit"].notna().any() else np.nan)
         st.metric("CTM Share", pct(ctm_share))
         st.metric("Median Days to Submit", "—" if np.isnan(median_days_submit) else f"{median_days_submit:.1f} d")
-
-    with right:
-        avg_rec_score = (f["Recording Score"].mean() if "Recording Score" in f.columns else np.nan)
-        st.metric("Avg Recording Score", "—" if np.isnan(avg_rec_score) else f"{avg_rec_score:.1f}")
 
     with enr_col:
         if not enrollments_monthly.empty:
@@ -549,7 +545,35 @@ if has_complaints_data:
     else:
         st.info("No rows for the selected filters to plot monthly volume.")
 
-    
+    # 2) Date of Occurence trends: weekly and monthly
+    if "Date of Occurence" in f.columns and f["Date of Occurence"].notna().any():
+        occ = f.dropna(subset=["Date of Occurence"]).copy()
+        # Week buckets (start of week)
+        occ["_week"] = occ["Date of Occurence"].dt.to_period("W").dt.start_time
+        occ["_month_occ"] = occ["Date of Occurence"].dt.to_period("M").dt.to_timestamp()
+
+        weekly = occ.groupby("_week").size().reset_index(name="count")
+        monthly_occ = occ.groupby("_month_occ").size().reset_index(name="count")
+
+        c1, c2 = st.columns(2)
+        with c1:
+            if not weekly.empty:
+                w_fig = px.line(weekly, x="_week", y="count", markers=True,
+                                 title="Complaints by Week (Date of Occurence)")
+                w_fig.update_layout(xaxis_title="Week", yaxis_title="Complaints")
+                st.plotly_chart(w_fig, use_container_width=True)
+            else:
+                st.info("No Date of Occurence values in range to plot weekly.")
+        with c2:
+            if not monthly_occ.empty:
+                m_fig = px.bar(monthly_occ, x="_month_occ", y="count",
+                               title="Complaints by Month (Date of Occurence)")
+                m_fig.update_layout(xaxis_title="Month", yaxis_title="Complaints")
+                st.plotly_chart(m_fig, use_container_width=True)
+            else:
+                st.info("No Date of Occurence values in range to plot monthly.")
+    else:
+        st.info("No 'Date of Occurence' column found to compute weekly/monthly trends.")
 
     
 
