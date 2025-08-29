@@ -684,6 +684,49 @@ else:
         st.info("Could not load complaints from compliance.csv. Place it in the app directory to compute ratios.")
 
 # -------------------------
+# CTM per 1,000 Enrollments
+# -------------------------
+st.subheader("CTM per 1,000 Enrollments")
+if has_complaints_data and not enrollments_monthly.empty:
+    ctm_only = f[f["Complaint Source"].eq("CMS (CTM)")].copy()
+    if not ctm_only.empty:
+        ctm_only["month"] = ctm_only["_trend_month"]
+        ctm_monthly = ctm_only.groupby("month").size().reset_index(name="ctm_complaints")
+
+        ctm_ratio = ctm_monthly.merge(enrollments_monthly, on="month", how="inner")
+        if not ctm_ratio.empty:
+            ctm_ratio["ctm_per_1000_enrollments"] = np.where(
+                ctm_ratio["enrollments"] > 0,
+                (ctm_ratio["ctm_complaints"] / ctm_ratio["enrollments"]) * 1000,
+                np.nan
+            )
+
+            ctm_fig = px.line(
+                ctm_ratio,
+                x="month",
+                y="ctm_per_1000_enrollments",
+                markers=True,
+                title="CTM per 1,000 Enrollments",
+                labels={"month": "Month", "ctm_per_1000_enrollments": "CTM per 1,000 Enrollments"},
+            )
+            ctm_fig.update_layout(showlegend=False)
+            ctm_fig.update_traces(
+                mode="lines+markers+text",
+                text=ctm_ratio["ctm_per_1000_enrollments"].round(1),
+                textposition="top center",
+            )
+            st.plotly_chart(ctm_fig, use_container_width=True)
+        else:
+            st.info("No overlapping months between CTM complaints and enrollments to compute CTM per 1,000.")
+    else:
+        st.info("No CTM complaints in the current selection.")
+else:
+    if not has_complaints_data:
+        st.info("Could not load complaints from compliance.csv to compute CTM per 1,000.")
+    else:
+        st.info("Could not load enrollments from enrollments.csv to compute CTM per 1,000.")
+
+# -------------------------
 # 30-Day Complaint Rate (by Enrollment Month)
 # -------------------------
 st.subheader("30-Day Complaint Rate")

@@ -218,8 +218,12 @@ def preprocess_complaints(df: pd.DataFrame) -> pd.DataFrame:
         if safe_col(df, col):
             df[col] = to_number(df[col])
 
-    # Derived complaint source
-    df["Complaint Source"] = np.where(df["CTM"] == True, "CMS (CTM)", "Carrier-Derived")
+    # Derived complaint source: only CTM == True is CMS-derived; unknowns stay Unknown
+    df["Complaint Source"] = np.select(
+        [df["CTM"].eq(True), df["CTM"].eq(False)],
+        ["CMS (CTM)", "Carrier-Derived"],
+        default="(Unknown)"
+    )
 
     # Response dates — prefer "Response Submited" as provided
     if safe_col(df, "Response Submited"):
