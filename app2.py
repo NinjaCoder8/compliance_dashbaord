@@ -7,6 +7,7 @@ import numpy as np
 import pandas as pd
 import plotly.express as px
 import plotly.graph_objects as go
+from plotly.subplots import make_subplots
 import streamlit as st
 from pathlib import Path
 
@@ -762,40 +763,47 @@ if has_complaints_data and not enrollments_monthly.empty and "Enrollment Date" i
             )
 
             if not rate_df2.empty:
-                rate_fig = px.line(
-                    rate_df2,
-                    x="month",
-                    y="rate",
-                    markers=True,
-                    title="30-Day Complaint Rate by Enrollment Cohort = complaints < 30d / enrollments",
-                    labels={"month": "Enrollment Month", "rate": "Rate"},
-                    custom_data=["complaints_30d", "enrollments"],
+                combined_fig = make_subplots(specs=[[{"secondary_y": True}]])
+                combined_fig.add_trace(
+                    go.Bar(
+                        x=rate_df2["month"],
+                        y=rate_df2["enrollments"],
+                        name="Enrollments",
+                        text=rate_df2["enrollments"],
+                        textposition="outside",
+                    ),
+                    secondary_y=False,
                 )
-                rate_fig.update_yaxes(tickformat=",.0%", autorange=True)
-                rate_fig.update_traces(
-                    mode="lines+markers+text",
-                    text=(rate_df2["rate"] * 100).round(1).astype(str) + "%",
-                    textposition="top center",
-                    hovertemplate="%{x|%b %Y}<br>%{customdata[0]:,.0f} / %{customdata[1]:,.0f} = %{y:.1%}<extra></extra>",
+                combined_fig.add_trace(
+                    go.Bar(
+                        x=rate_df2["month"],
+                        y=rate_df2["complaints_30d"],
+                        name="Complaints ≤30d",
+                        text=rate_df2["complaints_30d"],
+                        textposition="outside",
+                    ),
+                    secondary_y=False,
                 )
-                st.plotly_chart(rate_fig, use_container_width=True)
-
-                # Companion counts bar chart (enrollments & 30d complaints)
-                counts_df = rate_df2[["month", "enrollments", "complaints_30d"]].copy()
-                counts_long = counts_df.melt(id_vars="month", var_name="metric", value_name="count")
-                label_map = {"enrollments": "Enrollments", "complaints_30d": "Complaints ≤30d"}
-                counts_long["metric"] = counts_long["metric"].map(label_map)
-                counts_fig = px.bar(
-                    counts_long,
-                    x="month",
-                    y="count",
-                    color="metric",
+                combined_fig.add_trace(
+                    go.Scatter(
+                        x=rate_df2["month"],
+                        y=rate_df2["rate"],
+                        name="30-Day Complaint Rate",
+                        mode="lines+markers+text",
+                        text=(rate_df2["rate"] * 100).round(1).astype(str) + "%",
+                        textposition="top center",
+                    ),
+                    secondary_y=True,
+                )
+                combined_fig.update_layout(
+                    title="30-Day Complaint Rate by Enrollment Cohort + Monthly Counts",
                     barmode="group",
-                    title="Monthly Counts: Enrollments vs Complaints < 30d",
-                    labels={"month": "Month", "count": "Count", "metric": "Series"},
-                    text_auto=True,
+                    xaxis_title="Enrollment Month",
+                    legend_title_text="Series",
                 )
-                st.plotly_chart(counts_fig, use_container_width=True)
+                combined_fig.update_yaxes(title_text="Count", secondary_y=False)
+                combined_fig.update_yaxes(title_text="Rate", tickformat=",.0%", secondary_y=True)
+                st.plotly_chart(combined_fig, use_container_width=True)
             else:
                 st.info("No months available after applying the date range.")
         else:
