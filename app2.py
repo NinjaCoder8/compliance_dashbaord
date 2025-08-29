@@ -730,88 +730,78 @@ else:
 # -------------------------
 # 30-Day Complaint Rate (by Enrollment Month)
 # -------------------------
-st.subheader("30-Day Complaint Rate")
+st.subheader("Complaint Rate")
 
-if has_complaints_data and not enrollments_monthly.empty and "Enrollment Date" in _df.columns and "Date of Occurence" in _df.columns:
-    # Build from NON-date-filtered complaints, but keep dimension filters (team/agent/source), and exclude unknown carriers
-    mask_non_date = pd.Series(True, index=_df.index)
-    if sel_teams:    mask_non_date &= _df["Team Name"].isin(sel_teams)
-    if sel_agents:   mask_non_date &= _df["Agent Name"].isin(sel_agents)
-    if sel_ctm:      mask_non_date &= _df["Complaint Source"].isin(sel_ctm)
-    if safe_col(_df, "Carrier Name"):
-        mask_non_date &= _df["Carrier Name"].ne("(Unknown)")
+# Use total complaints per selected month (aligned with other charts) and compute rate vs enrollments
+if has_complaints_data and not f.empty and not enrollments_monthly.empty and "_trend_month" in f.columns:
+    comp_monthly_all = (
+        f.assign(month=f["_trend_month"])\
+         .groupby("month", dropna=False).size().reset_index(name="complaints")
+    )
 
-    c = _df.loc[mask_non_date].dropna(subset=["Enrollment Date", "Date of Occurence"]).copy()
-    if not c.empty:
-        c["days_from_enroll"] = (c["Date of Occurence"] - c["Enrollment Date"]).dt.days
-        c = c[(c["days_from_enroll"] >= 0) & (c["days_from_enroll"] <= 30)]
+    # Filter months to selected date range for consistency
+    if start is not None and end is not None:
+        start_ts = pd.to_datetime(start).to_period("M").to_timestamp()
+        end_ts = pd.to_datetime(end).to_period("M").to_timestamp()
+        comp_monthly_all = comp_monthly_all[(comp_monthly_all["month"] >= start_ts) & (comp_monthly_all["month"] <= end_ts)]
 
-        if not c.empty:
-            c["month"] = c["Enrollment Date"].dt.to_period("M").dt.to_timestamp()
-            m = c.groupby("month").size().reset_index(name="complaints_30d")
-            rate_df2 = enrollments_monthly.merge(m, on="month", how="left")
-            rate_df2["complaints_30d"] = rate_df2["complaints_30d"].fillna(0)
+    # Join with enrollments on month
+    rate_df2 = comp_monthly_all.merge(enrollments_monthly, on="month", how="left")
+    rate_df2["enrollments"] = rate_df2["enrollments"].fillna(0)
+    rate_df2["rate"] = rate_df2.apply(
+        lambda r: np.nan if (pd.isna(r["enrollments"]) or r["enrollments"] == 0) else r["complaints"] / r["enrollments"],
+        axis=1
+    )
 
-            if start is not None and end is not None:
-                start_ts = pd.to_datetime(start).to_period("M").to_timestamp()
-                end_ts = pd.to_datetime(end).to_period("M").to_timestamp()
-                rate_df2 = rate_df2[(rate_df2["month"] >= start_ts) & (rate_df2["month"] <= end_ts)]
-
-            rate_df2["rate"] = rate_df2.apply(
-                lambda r: np.nan if (pd.isna(r["enrollments"]) or r["enrollments"] == 0) else r["complaints_30d"] / r["enrollments"],
-                axis=1
-            )
-
-            if not rate_df2.empty:
-                combined_fig = make_subplots(specs=[[{"secondary_y": True}]])
-                combined_fig.add_trace(
-                    go.Bar(
-                        x=rate_df2["month"],
-                        y=rate_df2["enrollments"],
-                        name="Enrollments",
-                        text=rate_df2["enrollments"],
-                        textposition="outside",
-                    ),
-                    secondary_y=False,
-                )
-                combined_fig.add_trace(
-                    go.Bar(
-                        x=rate_df2["month"],
-                        y=rate_df2["complaints_30d"],
-                        name="Complaints ≤30d",
-                        text=rate_df2["complaints_30d"],
-                        textposition="outside",
-                    ),
-                    secondary_y=False,
-                )
-                combined_fig.add_trace(
-                    go.Scatter(
-                        x=rate_df2["month"],
-                        y=rate_df2["rate"],
-                        name="30-Day Complaint Rate",
-                        mode="lines+markers+text",
-                        text=(rate_df2["rate"] * 100).round(1).astype(str) + "%",
-                        textposition="top center",
-                    ),
-                    secondary_y=True,
-                )
-                combined_fig.update_layout(
-                    title="30-Day Complaint Rate by Enrollment Cohort + Monthly Counts",
-                    barmode="group",
-                    xaxis_title="Enrollment Month",
-                    legend_title_text="Series",
-                )
-                combined_fig.update_yaxes(title_text="Count", secondary_y=False)
-                combined_fig.update_yaxes(title_text="Rate", tickformat=",.0%", secondary_y=True)
-                st.plotly_chart(combined_fig, use_container_width=True)
-            else:
-                st.info("No months available after applying the date range.")
-        else:
-            st.info("No complaints with occurrence within 30 days of enrollment in current selection.")
+    if not rate_df2.empty:
+        combined_fig = make_subplots(specs=[[{"secondary_y": True}]])
+        combined_fig.add_trace(
+            go.Bar(
+                x=rate_df2["month"],
+                y=rate_df2["enrollments"],
+                name="Enrollments",
+                text=rate_df2["enrollments"],
+                textposition="outside",
+            ),
+            secondary_y=False,
+        )
+        combined_fig.add_trace(
+            go.Bar(
+                x=rate_df2["month"],
+                y=rate_df2["complaints"],
+                name="Complaints",
+                text=rate_df2["complaints"],
+                textposition="outside",
+            ),
+            secondary_y=False,
+        )
+        combined_fig.add_trace(
+            go.Scatter(
+                x=rate_df2["month"],
+                y=rate_df2["rate"],
+                name="Complaint Rate",
+                mode="lines+markers+text",
+                text=(rate_df2["rate"] * 100).round(1).astype(str) + "%",
+                textposition="top center",
+            ),
+            secondary_y=True,
+        )
+        combined_fig.update_layout(
+            title="Complaint Rate by Month (Total Complaints)",
+            barmode="group",
+            xaxis_title="Month",
+            legend_title_text="Series",
+        )
+        combined_fig.update_yaxes(title_text="Count", secondary_y=False)
+        combined_fig.update_yaxes(title_text="Rate", tickformat=",.0%", secondary_y=True)
+        st.plotly_chart(combined_fig, use_container_width=True)
     else:
-        st.info("No complaints rows with both 'Enrollment Date' and 'Date of Occurence'.")
+        st.info("No months available after applying the date range.")
 else:
-    st.info("Need complaints with 'Enrollment Date' and 'Date of Occurence', and enrollments data to compute 30-day rate.")
+    if not has_complaints_data or f.empty:
+        st.info("Not enough complaints data after filters to compute monthly totals.")
+    elif enrollments_monthly.empty:
+        st.info("Could not load enrollments from enrollments.csv. Place it in the app directory to compute rates.")
 
 # -------------------------
 # Carrier Comparison — % of Carrier-Derived, SLAs, and Trends
