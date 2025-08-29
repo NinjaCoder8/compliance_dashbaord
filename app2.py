@@ -104,18 +104,14 @@ ENR_EXPECTED = [
     "toNumber","wasBlocked","wasConnected","wasQueueVoicemail","wasVoicemail"
 ]
 
-
 # ---------- Casting helpers ----------
 def parse_date(series: pd.Series) -> pd.Series:
-    # Try standard parsing
-    parsed = pd.to_datetime(series, errors="coerce")
+    """Choose the parsing that yields the most valid timestamps; then fall back to common formats."""
+    a = pd.to_datetime(series, errors="coerce")  # month-first
+    b = pd.to_datetime(series, errors="coerce", dayfirst=True)  # day-first
+    parsed = b if b.notna().sum() > a.notna().sum() else a
     if parsed.notna().any():
         return parsed
-    # Try day-first parsing (e.g., 23/08/2025 07:44 PM)
-    parsed = pd.to_datetime(series, errors="coerce", dayfirst=True)
-    if parsed.notna().any():
-        return parsed
-    # Try specific common formats
     candidate_formats = [
         "%d/%m/%Y %I:%M %p",
         "%m/%d/%Y %I:%M %p",
@@ -131,8 +127,7 @@ def parse_date(series: pd.Series) -> pd.Series:
                 return parsed
         except Exception:
             continue
-    return pd.to_datetime(series, errors="coerce")
-
+    return a  # all NaT
 
 def to_bool(series: pd.Series) -> pd.Series:
     def _cast(v):
@@ -147,14 +142,12 @@ def to_bool(series: pd.Series) -> pd.Series:
     except Exception:
         return pd.Series([np.nan] * len(series), index=series.index)
 
-
 def to_number(series: pd.Series) -> pd.Series:
+    # Note: "10%" -> 10.0 (not 0.10). Divide by 100 later if using as a fraction.
     return pd.to_numeric(series.astype(str).str.replace('%', '', regex=False), errors="coerce")
-
 
 def safe_col(df: pd.DataFrame, name: str) -> bool:
     return name in df.columns
-
 
 @st.cache_data(show_spinner=False)
 def load_table(uploaded_file, sheet: Optional[str] = None) -> pd.DataFrame:
@@ -170,7 +163,6 @@ def load_table(uploaded_file, sheet: Optional[str] = None) -> pd.DataFrame:
         except Exception:
             df = pd.read_excel(uploaded_file, engine="openpyxl")
     else:
-        # CSV: try multiple encodings
         encodings_to_try = ["utf-8", "utf-8-sig", "cp1252", "latin1"]
         last_error = None
         df = None
@@ -192,7 +184,6 @@ def load_table(uploaded_file, sheet: Optional[str] = None) -> pd.DataFrame:
     df.columns = [c.strip() for c in df.columns]
     return df
 
-
 @st.cache_data(show_spinner=False)
 def load_csv_from_path(file_path) -> pd.DataFrame:
     p = Path(file_path)
@@ -211,9 +202,7 @@ def load_csv_from_path(file_path) -> pd.DataFrame:
     st.error(f"Failed to read {p.name} with common encodings. Last error: {last_error}")
     return pd.DataFrame()
 
-
 # ---------- Complaints preprocessing ----------
-
 def preprocess_complaints(df: pd.DataFrame) -> pd.DataFrame:
     if df.empty:
         return df
@@ -238,8 +227,12 @@ def preprocess_complaints(df: pd.DataFrame) -> pd.DataFrame:
         if safe_col(df, col):
             df[col] = to_number(df[col])
 
-    # Derived complaint source
-    df["Complaint Source"] = np.where(df["CTM"] == True, "CMS (CTM)", "Carrier-Derived")
+    # Derived complaint source (do not coerce NaNs into Carrier-Derived)
+    df["Complaint Source"] = np.select(
+        [df["CTM"].eq(True), df["CTM"].eq(False)],
+        ["CMS (CTM)", "Carrier-Derived"],
+        default="(Unknown)"
+    )
 
     # Response dates — prefer "Response Submited" as provided
     if safe_col(df, "Response Submited"):
@@ -255,25 +248,26 @@ def preprocess_complaints(df: pd.DataFrame) -> pd.DataFrame:
     deadline = df["Deadline Date"] if safe_col(df, "Deadline Date") else pd.Series(pd.NaT, index=df.index)
     occurred = df["Date of Occurence"] if safe_col(df, "Date of Occurence") else pd.Series(pd.NaT, index=df.index)
 
-    # On-time logic: submitted <= deadline
-    on_time = (response_date.notna()) & (deadline.notna()) & (response_date <= deadline)
+    # On-time logic: nullable boolean; unknown stays NA
+    now = pd.Timestamp.now(tz="Asia/Beirut").tz_localize(None)
+    on_time = pd.Series(pd.NA, index=df.index, dtype="boolean")
+    mask_both = response_date.notna() & deadline.notna()
+    on_time[mask_both] = response_date[mask_both] <= deadline[mask_both]
     df["On Time (<= Deadline)"] = on_time
 
     # Overdue logic: not submitted and today > deadline
-    now = pd.Timestamp(datetime.now(timezone.utc)).tz_localize(None)
     overdue = (response_date.isna()) & (deadline.notna()) & (deadline < now)
     df["Overdue (No Submit > Deadline)"] = overdue
 
     # Days to submit (from occurrence)
     df["Days to Submit"] = (response_date - occurred).dt.days
 
-    # Days late
-    days_late = pd.Series(0.0, index=df.index)
+    # Days late: only when late or open-overdue; else NaN
+    df["Days Late"] = pd.Series(pd.NA, index=df.index, dtype="Float64")
     late_submits = (response_date.notna()) & (deadline.notna()) & (response_date > deadline)
-    days_late[late_submits] = (response_date[late_submits] - deadline[late_submits]).dt.days
+    df.loc[late_submits, "Days Late"] = (response_date - deadline).dt.days
     open_overdue = (response_date.isna()) & (deadline.notna()) & (deadline < now)
-    days_late[open_overdue] = (now - deadline[open_overdue]).dt.days
-    df["Days Late"] = days_late
+    df.loc[open_overdue, "Days Late"] = (now - deadline).dt.days
 
     # Month bucket helper (default to Date of Occurence, overridable from UI)
     default_dim = "Date of Occurence" if df["Date of Occurence"].notna().any() else "Enrollment Date"
@@ -292,9 +286,7 @@ def preprocess_complaints(df: pd.DataFrame) -> pd.DataFrame:
 
     return df
 
-
 # ---------- Enrollments preprocessing ----------
-
 def preprocess_enrollments(df: pd.DataFrame) -> pd.DataFrame:
     if df.empty:
         return df
@@ -315,10 +307,8 @@ def preprocess_enrollments(df: pd.DataFrame) -> pd.DataFrame:
             df[c] = df[c].astype(str).str.strip()
     return df
 
-
 def default_enrollment_values(unique_vals: List[str]) -> List[str]:
     # Heuristic: preselect values that look like sales/enrollments
-    lowered = {str(v).strip().lower() for v in unique_vals}
     picks = []
     keywords = [
         "sale", "sold", "enroll", "policy", "bind", "conversion",
@@ -328,15 +318,12 @@ def default_enrollment_values(unique_vals: List[str]) -> List[str]:
         vl = str(v).strip().lower()
         if any(k in vl for k in keywords):
             picks.append(v)
-    # If nothing matched, return empty (let user pick)
     return picks
 
-
 def pct(a: float) -> str:
-    if a is None or np.isnan(a):
+    if a is None or (isinstance(a, float) and np.isnan(a)):
         return "—"
     return f"{a*100:.1f}%"
-
 
 # -------------------------
 # Data loading from local directory
@@ -348,33 +335,42 @@ enrollments_path = base_dir / "enrollments.csv"
 raw_df = load_csv_from_path(complaints_path)
 enr_raw = load_csv_from_path(enrollments_path)
 
-# Handle missing/empty complaints more gracefully
+# -------------------------
+# Sidebar controls
+# -------------------------
+with st.sidebar:
+    st.header("Filters")
+    # Always checked on page load
+    require_connected = st.checkbox(
+        "Require connected calls for enrollments",
+        value=True,
+        help="If checked, only rows with wasConnected == True are counted as enrollments."
+    )
+    # REMOVED: enrollment keyword regex UI
+
+# -------------------------
+# Complaints filters
+# -------------------------
 if raw_df.empty:
     st.info(f"Could not load complaints data from {complaints_path}. Place 'compliance.csv' in the app directory.")
     _df = pd.DataFrame(columns=EXPECTED_COLS)
     has_complaints_data = False
 else:
-    # Preprocess complaints
     _df = preprocess_complaints(raw_df.copy())
     has_complaints_data = not _df.empty
 
-# -------------------------
-# Filters (complaints)
-# -------------------------
 if has_complaints_data:
-    st.sidebar.header("Filters")
-    all_dims = [c for c in DATE_COLS_CANDIDATES if safe_col(_df, c)]
-    if not all_dims:
-        all_dims = ["Date of Occurence"]
-
+    all_dims = [c for c in DATE_COLS_CANDIDATES if safe_col(_df, c)] or ["Date of Occurence"]
+    # Default to "Date of Occurence" if present
+    default_idx = all_dims.index("Date of Occurence") if "Date of Occurence" in all_dims else 0
     try:
         date_dim = st.sidebar.selectbox(
             "Date dimension for complaint trends",
             options=all_dims,
-            index=min(1, len(all_dims) - 1)
+            index=default_idx
         )
     except Exception:
-        date_dim = all_dims[0]
+        date_dim = all_dims[default_idx]
 
     _df["_trend_month"] = _df[date_dim].dt.to_period("M").dt.to_timestamp()
 
@@ -394,7 +390,7 @@ if has_complaints_data:
     sel_agents = st.sidebar.multiselect("Agent(s)", agents)
     sel_carriers = st.sidebar.multiselect("Carrier(s)", carriers)
 
-    sel_ctm = st.sidebar.multiselect("Complaint Source", ["CMS (CTM)", "Carrier-Derived"])  # empty = all
+    sel_ctm = st.sidebar.multiselect("Complaint Source", ["CMS (CTM)", "Carrier-Derived", "(Unknown)"])  # empty = all
 
     mask = mask_date.copy()
     if sel_teams:
@@ -406,14 +402,16 @@ if has_complaints_data:
     if sel_ctm:
         mask &= _df["Complaint Source"].isin(sel_ctm)
 
-    f = _df.loc[mask].copy()
+    # Exclude unknown carriers from ALL calculations
+    if safe_col(_df, "Carrier Name"):
+        mask &= _df["Carrier Name"].ne("(Unknown)")
 
-    #st.caption(f"Filtered complaint rows: **{len(f):,}** of **{len(_df):,}** total.")
+    f = _df.loc[mask].copy()
 else:
-    # Define placeholders so later sections can safely check
     f = pd.DataFrame()
     start = None
     end = None
+    sel_teams = sel_agents = sel_carriers = sel_ctm = []
 
 # -------------------------
 # Enrollments mapping and monthly aggregation
@@ -443,8 +441,6 @@ if not enr_raw.empty:
     ]
     mapping_cols = [c for c in mapping_candidates if safe_col(enr_raw, c)]
 
-    require_connected = True
-
     if not mapping_cols:
         # Count all rows per month (optionally require wasConnected)
         enr_mask = pd.Series(True, index=enr_raw.index)
@@ -460,7 +456,6 @@ if not enr_raw.empty:
         map_col = mapping_cols[0]
         uniques = sorted([v for v in enr_raw[map_col].dropna().unique().tolist() if str(v).strip() != ""])
         picked_vals = default_enrollment_values(uniques)
-        extra_regex = "sale|sold|enroll|policy|bind|app|submitted|s_app_submitted"
 
         enr_mask = pd.Series(True, index=enr_raw.index)
         enr_mask &= enr_raw[enr_date_col].notna()
@@ -468,13 +463,8 @@ if not enr_raw.empty:
             enr_mask &= (enr_raw["wasConnected"] == True)
         if picked_vals:
             enr_mask &= enr_raw[map_col].isin(picked_vals)
-        if extra_regex:
-            try:
-                rx = enr_raw["result"].fillna("").str.contains(extra_regex, case=False, regex=True) if safe_col(enr_raw, "result") else pd.Series(False, index=enr_raw.index)
-                rc = enr_raw["resultCategory"].fillna("").str.contains(extra_regex, case=False, regex=True) if safe_col(enr_raw, "resultCategory") else pd.Series(False, index=enr_raw.index)
-                enr_mask &= (rx | rc | enr_raw[map_col].astype(str).str.contains(extra_regex, case=False, regex=True))
-            except Exception:
-                pass
+
+        # REMOVED: regex enrichment across result/resultCategory/map_col
 
         enr = enr_raw.loc[enr_mask].copy()
         if not enr.empty:
@@ -494,9 +484,10 @@ if has_complaints_data:
 
     with mid:
         ctm_share = (f["Complaint Source"].eq("CMS (CTM)").mean() if len(f) else np.nan)
-        median_days_submit = (f["Days to Submit"].median() if f["Days to Submit"].notna().any() else np.nan)
+        md_mask = (f["Days to Submit"].notna()) & (f["Days to Submit"] >= 0)
+        median_days_submit = f.loc[md_mask, "Days to Submit"].median() if md_mask.any() else np.nan
         st.metric("CTM Share", pct(ctm_share))
-        st.metric("Median Days to Submit", "—" if np.isnan(median_days_submit) else f"{median_days_submit:.1f} d")
+        st.metric("Median Days to Submit", "—" if (isinstance(median_days_submit, float) and np.isnan(median_days_submit)) else f"{median_days_submit:.1f} d")
 
     with enr_col:
         if not enrollments_monthly.empty:
@@ -509,12 +500,11 @@ if has_complaints_data:
             total_enr = int(em["enrollments"].sum()) if not em.empty else 0
             avg_enr = float(em["enrollments"].mean()) if not em.empty else np.nan
             st.metric("Total Enrollments", f"{total_enr:,}")
-            st.metric("Avg Enrollments/Month", "—" if np.isnan(avg_enr) else f"{avg_enr:.1f}")
+            st.metric("Avg Enrollments/Month", "—" if (isinstance(avg_enr, float) and np.isnan(avg_enr)) else f"{avg_enr:.1f}")
         else:
             st.metric("Total Enrollments", "—")
             st.metric("Avg Enrollments/Month", "—")
 else:
-    # Only show enrollments KPIs if available
     col = st.columns([1])[0]
     with col:
         if not enrollments_monthly.empty:
@@ -522,7 +512,7 @@ else:
             total_enr = int(em["enrollments"].sum()) if not em.empty else 0
             avg_enr = float(em["enrollments"].mean()) if not em.empty else np.nan
             st.metric("Total Enrollments", f"{total_enr:,}")
-            st.metric("Avg Enrollments/Month", "—" if np.isnan(avg_enr) else f"{avg_enr:.1f}")
+            st.metric("Avg Enrollments/Month", "—" if (isinstance(avg_enr, float) and np.isnan(avg_enr)) else f"{avg_enr:.1f}")
 
 # -------------------------
 # Charts (complaints)
@@ -546,11 +536,10 @@ if has_complaints_data:
     else:
         st.info("No rows for the selected filters to plot monthly volume.")
 
-    # 2) Date of Occurence trends: weekly and monthly
+    # 2) Date of Occurence trends: weekly and monthly (weeks start Monday)
     if "Date of Occurence" in f.columns and f["Date of Occurence"].notna().any():
         occ = f.dropna(subset=["Date of Occurence"]).copy()
-        # Week buckets (start of week)
-        occ["_week"] = occ["Date of Occurence"].dt.to_period("W").dt.start_time
+        occ["_week"] = occ["Date of Occurence"].dt.to_period("W-MON").dt.start_time
         occ["_month_occ"] = occ["Date of Occurence"].dt.to_period("M").dt.to_timestamp()
 
         weekly = occ.groupby("_week").size().reset_index(name="count")
@@ -589,14 +578,14 @@ if has_complaints_data:
     else:
         st.info("No 'Date of Occurence' column found to compute weekly/monthly trends.")
 
-    # 2b) Enrollment Date duplicate trends: weekly and monthly
+    # 2b) Enrollment Date duplicate trends: weekly and monthly (weeks start Monday)
     if "Enrollment Date" in f.columns and f["Enrollment Date"].notna().any():
-        enr = f.dropna(subset=["Enrollment Date"]).copy()
-        enr["_week_enr"] = enr["Enrollment Date"].dt.to_period("W").dt.start_time
-        enr["_month_enr"] = enr["Enrollment Date"].dt.to_period("M").dt.to_timestamp()
+        enr_c = f.dropna(subset=["Enrollment Date"]).copy()
+        enr_c["_week_enr"] = enr_c["Enrollment Date"].dt.to_period("W-MON").dt.start_time
+        enr_c["_month_enr"] = enr_c["Enrollment Date"].dt.to_period("M").dt.to_timestamp()
 
-        weekly_enr = enr.groupby("_week_enr").size().reset_index(name="count")
-        monthly_enr = enr.groupby("_month_enr").size().reset_index(name="count")
+        weekly_enr = enr_c.groupby("_week_enr").size().reset_index(name="count")
+        monthly_enr = enr_c.groupby("_month_enr").size().reset_index(name="count")
 
         e1, e2 = st.columns(2)
         with e1:
@@ -631,8 +620,6 @@ if has_complaints_data:
     else:
         st.info("No 'Enrollment Date' column found to compute weekly/monthly trends.")
 
-    
-
 # -------------------------
 # Complaints vs Enrollments (Dual-axis) + Ratio
 # -------------------------
@@ -640,7 +627,6 @@ st.subheader("Complaints vs Enrollments + Ratios")
 
 ratio_df = pd.DataFrame()
 if has_complaints_data:
-    # compute only when we had complaints charts (vol) available
     vol = (
         f.assign(month=f["_trend_month"])\
          .groupby("month", dropna=False).size().reset_index(name="count")
@@ -648,11 +634,18 @@ if has_complaints_data:
     if not vol.empty and not enrollments_monthly.empty:
         comp_monthly = vol.groupby("month")["count"].sum().reset_index(name="complaints")
         ratio_df = comp_monthly.merge(enrollments_monthly, on="month", how="inner")
-        ratio_df["complaints_per_1000_enrollments"] = (ratio_df["complaints"] / ratio_df["enrollments"]) * 1000
+        ratio_df["complaints_per_1000_enrollments"] = np.where(
+            ratio_df["enrollments"] > 0,
+            (ratio_df["complaints"] / ratio_df["enrollments"]) * 1000,
+            np.nan
+        )
 
         r_fig = go.Figure()
-        r_fig.add_bar(x=ratio_df["month"], y=ratio_df["complaints"], name="Complaints", text=ratio_df["complaints"], textposition="outside")
-        r_fig.add_scatter(x=ratio_df["month"], y=ratio_df["enrollments"], name="Enrollments", mode="lines+markers+text", text=ratio_df["enrollments"], textposition="top center", yaxis="y2")
+        r_fig.add_bar(x=ratio_df["month"], y=ratio_df["complaints"], name="Complaints",
+                      text=ratio_df["complaints"], textposition="outside")
+        r_fig.add_scatter(x=ratio_df["month"], y=ratio_df["enrollments"], name="Enrollments",
+                          mode="lines+markers+text", text=ratio_df["enrollments"],
+                          textposition="top center", yaxis="y2")
         r_fig.update_layout(
             title="Complaints vs Enrollments",
             yaxis=dict(title="Complaints"),
@@ -671,7 +664,11 @@ if has_complaints_data:
             labels={"month": "Month", "complaints_per_1000_enrollments": "Complaints per 1,000 Enrollments"},
         )
         rr_fig.update_layout(showlegend=False)
-        rr_fig.update_traces(mode="lines+markers+text", text=ratio_df["complaints_per_1000_enrollments"].round(1), textposition="top center")
+        rr_fig.update_traces(
+            mode="lines+markers+text",
+            text=ratio_df["complaints_per_1000_enrollments"].round(1),
+            textposition="top center"
+        )
         st.plotly_chart(rr_fig, use_container_width=True)
     else:
         if enrollments_monthly.empty:
@@ -682,15 +679,21 @@ else:
     if not enrollments_monthly.empty:
         st.info("Could not load complaints from compliance.csv. Place it in the app directory to compute ratios.")
 
- 
-
 # -------------------------
 # 30-Day Complaint Rate (by Enrollment Month)
 # -------------------------
 st.subheader("30-Day Complaint Rate")
 
-if has_complaints_data and not enrollments_monthly.empty and "Enrollment Date" in f.columns and "Date of Occurence" in f.columns:
-    c = f.dropna(subset=["Enrollment Date", "Date of Occurence"]).copy()
+if has_complaints_data and not enrollments_monthly.empty and "Enrollment Date" in _df.columns and "Date of Occurence" in _df.columns:
+    # Build from NON-date-filtered complaints, but keep dimension filters (team/agent/source), and exclude unknown carriers
+    mask_non_date = pd.Series(True, index=_df.index)
+    if sel_teams:    mask_non_date &= _df["Team Name"].isin(sel_teams)
+    if sel_agents:   mask_non_date &= _df["Agent Name"].isin(sel_agents)
+    if sel_ctm:      mask_non_date &= _df["Complaint Source"].isin(sel_ctm)
+    if safe_col(_df, "Carrier Name"):
+        mask_non_date &= _df["Carrier Name"].ne("(Unknown)")
+
+    c = _df.loc[mask_non_date].dropna(subset=["Enrollment Date", "Date of Occurence"]).copy()
     if not c.empty:
         c["days_from_enroll"] = (c["Date of Occurence"] - c["Enrollment Date"]).dt.days
         c = c[(c["days_from_enroll"] >= 0) & (c["days_from_enroll"] <= 30)]
@@ -706,8 +709,10 @@ if has_complaints_data and not enrollments_monthly.empty and "Enrollment Date" i
                 end_ts = pd.to_datetime(end).to_period("M").to_timestamp()
                 rate_df2 = rate_df2[(rate_df2["month"] >= start_ts) & (rate_df2["month"] <= end_ts)]
 
-            rate_df2["rate"] = rate_df2["complaints_30d"] / rate_df2["enrollments"]
-            rate_df2["rate"] = rate_df2["rate"].replace([np.inf, -np.inf], np.nan)
+            rate_df2["rate"] = rate_df2.apply(
+                lambda r: np.nan if (pd.isna(r["enrollments"]) or r["enrollments"] == 0) else r["complaints_30d"] / r["enrollments"],
+                axis=1
+            )
 
             if not rate_df2.empty:
                 rate_fig = px.line(
@@ -768,26 +773,27 @@ if has_complaints_data and not f.empty and safe_col(f, "Carrier Name"):
         "avg_days_late": by_car["Days Late"].mean(),
     }).reset_index().rename(columns={"Carrier Name": "carrier"})
 
-    # Exclude unknown carriers from visualizations
-    metrics_df = metrics_df[metrics_df["carrier"] != "(Unknown)"]
+    # Already excluded "(Unknown)" carriers from f, so nothing to drop here
     metrics_df = metrics_df.sort_values("complaints", ascending=False)
     selection = metrics_df.copy()
     selected_carriers = selection["carrier"].tolist()
 
-    # 1) Composition: 100% stacked (Carrier-Derived vs CTM)
+    # 1) Composition: 100% stacked (Carrier-Derived vs CTM) with percent text
     comp = (
         f[f["Carrier Name"].isin(selected_carriers)]
           .groupby(["Carrier Name", "Complaint Source"], dropna=False)
           .size().reset_index(name="count")
     )
     if not comp.empty:
+        comp["share"] = comp.groupby("Carrier Name")["count"].transform(lambda s: s / s.sum())
         comp_fig = px.bar(
-            comp, x="Carrier Name", y="count", color="Complaint Source",
+            comp, x="Carrier Name", y="share", color="Complaint Source",
             title="Complaint Source Mix by Carrier",
-            labels={"Carrier Name": "Carrier", "count": "Share"},
-            text_auto=True,
+            labels={"Carrier Name": "Carrier", "share": "Share"},
+            text=comp["share"].mul(100).round(0).astype(int).astype(str) + "%",
         )
-        comp_fig.update_layout(barmode="stack", barnorm="percent", xaxis_title=None, legend_title_text="Source")
+        comp_fig.update_layout(barmode="stack", xaxis_title=None, legend_title_text="Source")
+        comp_fig.update_yaxes(tickformat=",.0%")
         st.plotly_chart(comp_fig, use_container_width=True)
 
     # 2) Bubble: On-Time vs % Carrier-Derived, bubble size = volume, color = Avg Days Late
@@ -814,8 +820,6 @@ if has_complaints_data and not f.empty and safe_col(f, "Carrier Name"):
         bub_fig.update_layout(xaxis_autorange=True, yaxis_autorange=True)
         st.plotly_chart(bub_fig, use_container_width=True)
 
-    
-
     # 4) Heatmap: Monthly complaint volume (limited to selected carriers)
     if "_trend_month" in f.columns and not f.empty and selected_carriers:
         month_counts = (
@@ -825,7 +829,6 @@ if has_complaints_data and not f.empty and safe_col(f, "Carrier Name"):
         )
         if not month_counts.empty:
             pivot = month_counts.pivot(index="Carrier Name", columns="month", values="count").fillna(0)
-            # Order carriers by total volume, after excluding unknowns above
             pivot = pivot.loc[selection.set_index("carrier").index.intersection(pivot.index)]
             if not pivot.empty:
                 hm_fig = px.imshow(
@@ -837,8 +840,6 @@ if has_complaints_data and not f.empty and safe_col(f, "Carrier Name"):
                     title="Monthly Complaint Volume by Carrier",
                 )
                 st.plotly_chart(hm_fig, use_container_width=True)
-            else:
-                st.info("No carriers available after excluding unknown.")
 
     # -------------------------
     # Agent Leaderboard
