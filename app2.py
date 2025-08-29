@@ -329,8 +329,8 @@ def pct(a: float) -> str:
 # Data loading from local directory
 # -------------------------
 base_dir = Path(__file__).resolve().parent
-complaints_path = base_dir / "compliance.csv"
-enrollments_path = base_dir / "enrollments.csv"
+complaints_path = base_dir / "compliance2.csv"
+enrollments_path = base_dir / "enrollments2.csv"
 
 raw_df = load_csv_from_path(complaints_path)
 enr_raw = load_csv_from_path(enrollments_path)
@@ -379,7 +379,11 @@ if has_complaints_data:
         min_d = datetime(2024, 1, 1)
         max_d = datetime.today()
 
-    start, end = st.sidebar.date_input("Complaints date range", value=(min_d, max_d))
+    # Default start date set to 01/12/2024 (day-first: 1 December 2024)
+    default_start = pd.to_datetime(datetime(2024, 12, 1))
+    default_end = max_d if (pd.notna(max_d) and max_d >= default_start) else default_start
+
+    start, end = st.sidebar.date_input("Complaints date range", value=(default_start, default_end))
     mask_date = (_df[date_dim] >= pd.to_datetime(start)) & (_df[date_dim] <= pd.to_datetime(end))
 
     teams = sorted(_df["Team Name"].dropna().unique().tolist()) if safe_col(_df, "Team Name") else []
