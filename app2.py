@@ -839,6 +839,31 @@ if has_complaints_data and not f.empty and safe_col(f, "Carrier Name"):
                 st.plotly_chart(hm_fig, use_container_width=True)
             else:
                 st.info("No carriers available after excluding unknown.")
+
+    # -------------------------
+    # Agent Leaderboard
+    # -------------------------
+    st.subheader("Agent Leaderboard (Complaints)")
+    if has_complaints_data and "Agent Name" in f.columns and not f.empty:
+        grp = f.groupby("Agent Name", dropna=False)
+        ctm_cases = grp["Complaint Source"].apply(lambda s: (s == "CMS (CTM)").sum() if len(s) else 0)
+        carrier_cases = grp["Complaint Source"].apply(lambda s: (s == "Carrier-Derived").sum() if len(s) else 0)
+        leaderboard = pd.DataFrame({
+            "Cases": grp.size(),
+            "CTM Cases": ctm_cases,
+            "Carrier Cases": carrier_cases,
+            "On-Time Rate": grp["On Time (<= Deadline)"].mean(),
+            "Avg Days to Submit": grp["Days to Submit"].mean(),
+            "Avg Days Late": grp["Days Late"].mean(),
+            "CTM Share": grp["Complaint Source"].apply(lambda s: (s == "CMS (CTM)").mean() if len(s) else np.nan),
+        }).reset_index().sort_values(["Cases", "On-Time Rate"], ascending=[False, False])
+
+        st.dataframe(leaderboard, use_container_width=True)
+
+        csv_bytes = leaderboard.to_csv(index=False).encode("utf-8")
+        st.download_button("Download Leaderboard (CSV)", data=csv_bytes, file_name="leaderboard.csv", mime="text/csv")
+    else:
+        st.info("Upload your complaints file to see the leaderboard.")
 else:
     st.info("No carrier data available in the current selection.")
 
